@@ -1,6 +1,7 @@
-const express = require('express');
-const axios = require('axios');
-const cors = require('cors');
+const express = require("express");
+const fetch = require("node-fetch");
+const cors = require("cors");
+const puppeteer = require("puppeteer");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -9,86 +10,150 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-// ComicK API base URL
-const COMICK_API_BASE = 'https://api.comick.io';
-
 // Route to fetch top manga from ComicK API
-app.get('/top', async (req, res) => {
+app.get("/top", async (req, res) => {
+  let browser;
   try {
-    console.log('Fetching top manga from ComicK API...');
+    console.log("Launching browser to fetch ComicK API data...");
     
-    const response = await axios.get(`${COMICK_API_BASE}/top`, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-      },
-      timeout: 10000 // 10 second timeout
+    // Launch browser
+    browser = await puppeteer.launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
     });
-
-    console.log('Successfully fetched data from ComicK API');
-    res.json(response.data);
+    
+    const page = await browser.newPage();
+    
+    // Set user agent to mimic a real browser
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+    
+    // Navigate to the API
+    await page.goto('https://api.comick.io/top', {
+      waitUntil: 'networkidle2',
+      timeout: 30000
+    });
+    
+    // Get the page content
+    const content = await page.content();
+    
+    // Extract JSON from the page
+    const data = await page.evaluate(() => {
+      return JSON.parse(document.body.textContent);
+    });
+    
+    console.log("Successfully fetched data from ComicK API using Puppeteer");
+    res.json(data);
     
   } catch (error) {
-    console.error('Error fetching data from ComicK API:', error.message);
+    console.error("Puppeteer fetch failed:", error.message);
+    res.status(500).json({
+      error: "Failed to fetch data from ComicK API",
+      message: error.message,
+    });
+  } finally {
+    // Always close the browser
+    if (browser) {
+      await browser.close();
+      console.log("Browser closed");
+    }
+  }
+});
+
+// Generic fetch endpoint using Puppeteer
+app.get("/fetch", async (req, res) => {
+  let browser;
+  try {
+    const url = req.query.url;
     
-    if (error.response) {
-      // The request was made and the server responded with a status code
-      // that falls out of the range of 2xx
-      res.status(error.response.status).json({
-        error: 'Failed to fetch data from ComicK API',
-        status: error.response.status,
-        message: error.response.statusText
+    if (!url) {
+      return res.status(400).json({
+        error: "Missing URL parameter",
+        message: "Please provide a URL parameter: /fetch?url=https://example.com"
       });
-    } else if (error.request) {
-      // The request was made but no response was received
-      res.status(503).json({
-        error: 'No response received from ComicK API',
-        message: 'The ComicK API server is not responding'
-      });
-    } else {
-      // Something happened in setting up the request that triggered an Error
-      res.status(500).json({
-        error: 'Internal server error',
-        message: error.message
-      });
+    }
+
+    console.log(`Launching browser to fetch: ${url}`);
+    
+    // Launch browser
+    browser = await puppeteer.launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
+    });
+    
+    const page = await browser.newPage();
+    
+    // Set user agent to mimic a real browser
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+    
+    // Navigate to the URL
+    await page.goto(url, {
+      waitUntil: 'networkidle2',
+      timeout: 30000
+    });
+    
+    // Extract content from the page
+    const data = await page.evaluate(() => {
+      const contentType = document.contentType || '';
+      if (contentType.includes('application/json')) {
+        return JSON.parse(document.body.textContent);
+      } else {
+        return document.body.textContent;
+      }
+    });
+    
+    console.log("Successfully fetched data using Puppeteer");
+    res.json(data);
+    
+  } catch (error) {
+    console.error("Puppeteer fetch failed:", error.message);
+    res.status(500).json({
+      error: "Failed to fetch data",
+      message: error.message,
+    });
+  } finally {
+    // Always close the browser
+    if (browser) {
+      await browser.close();
+      console.log("Browser closed");
     }
   }
 });
 
 // Health check endpoint
-app.get('/health', (req, res) => {
-  res.json({ status: 'OK', message: 'ComicK API server is running' });
+app.get("/health", (req, res) => {
+  res.json({ status: "OK", message: "ComicK API server is running" });
 });
 
 // Root endpoint
-app.get('/', (req, res) => {
+app.get("/", (req, res) => {
   res.json({
-    message: 'ComicK API Server',
+    message: "Puppeteer Fetch API Server",
     endpoints: {
-      '/top': 'Get top manga from ComicK API',
-      '/health': 'Health check endpoint'
+      "/fetch": "Fetch any URL using Puppeteer: /fetch?url=https://example.com",
+      "/health": "Health check endpoint"
     }
   });
 });
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-  console.error('Unhandled error:', err);
+  console.error("Unhandled error:", err);
   res.status(500).json({
-    error: 'Internal server error',
-    message: 'Something went wrong on the server'
+    error: "Internal server error",
+    message: "Something went wrong on the server",
   });
 });
 
 // 404 handler
-app.use('*', (req, res) => {
+app.use("*", (req, res) => {
   res.status(404).json({
-    error: 'Not found',
-    message: `Route ${req.originalUrl} not found`
+    error: "Not found",
+    message: `Route ${req.originalUrl} not found`,
   });
 });
 
 app.listen(PORT, () => {
-  console.log(`🚀 ComicK API server running on port ${PORT}`);
-  console.log(`📖 Top manga endpoint: http://localhost:${PORT}/top`);
+  console.log(`🚀 Puppeteer Fetch API server running on port ${PORT}`);
+  console.log(`📡 Fetch endpoint: http://localhost:${PORT}/fetch?url=https://example.com`);
   console.log(`🏥 Health check: http://localhost:${PORT}/health`);
-}); 
+});
